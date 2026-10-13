@@ -1,53 +1,226 @@
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
+import './App.css';
 
+/* ---------- Settings ---------- */
+// Apna Lemon Squeezy checkout link yahan daalein
+const LEMON_SQUEEZY_CHECKOUT_URL =
+  'https://your-store.lemonsqueezy.com/checkout/buy/your-product-id';
+const FREE_ITEM_LIMIT = 2;
+const TAX_RATE = 0.05; // backend (api/index.js) me bhi 5% hai
+
+/* ---------- Helpers ---------- */
+const money = (n) =>
+  '$' +
+  Number(n || 0).toLocaleString('en-US', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+
+const formatDate = () =>
+  new Date().toLocaleDateString('en-US', {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+  });
+
+// Backend jaisa hi hisab, taake preview aur PDF ka total same ho
+const lineTotal = (item) =>
+  Math.max(0, Number(item.qty) || 1) * Math.max(0, Number(item.price) || 0);
+
+/* ---------- Icons ---------- */
+const Icon = ({ children, size = 18 }) => (
+  <svg
+    width={size}
+    height={size}
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="1.8"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
+  >
+    {children}
+  </svg>
+);
+
+const IconDoc = () => (
+  <Icon size={20}>
+    <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" />
+    <path d="M14 3v5h5" />
+    <path d="M9 13h6M9 17h4" />
+  </Icon>
+);
+const IconPlus = () => (
+  <Icon size={16}>
+    <path d="M12 5v14M5 12h14" />
+  </Icon>
+);
+const IconTrash = () => (
+  <Icon size={17}>
+    <path d="M4 7h16M10 11v6M14 11v6" />
+    <path d="M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12" />
+    <path d="M9 7V4h6v3" />
+  </Icon>
+);
+const IconDownload = () => (
+  <Icon>
+    <path d="M12 4v11M7 11l5 5 5-5" />
+    <path d="M5 20h14" />
+  </Icon>
+);
+const IconCheck = () => (
+  <Icon size={16}>
+    <path d="M5 12.5l4.5 4.5L19 7.5" />
+  </Icon>
+);
+
+/* ---------- Live preview (PDF jaisa) ---------- */
+function InvoicePreview({ invoiceNumber, businessName, clientName, clientEmail, items }) {
+  const subtotal = items.reduce((sum, i) => sum + lineTotal(i), 0);
+  const tax = subtotal * TAX_RATE;
+  const grand = subtotal + tax;
+
+  return (
+    <div className="paper" aria-label="Invoice preview">
+      <div className="paper-head">
+        <span className="paper-brand">{businessName || 'Invoice Generator'}</span>
+        <span className="paper-title">
+          Invoice
+          <strong>{invoiceNumber || '—'}</strong>
+        </span>
+      </div>
+
+      <div className="paper-meta">
+        <div>
+          <span className="paper-label">Billed to</span>
+          <div className={clientName ? 'paper-client' : 'paper-client is-empty'}>
+            {clientName || 'Client name'}
+          </div>
+          <div className="paper-email">{clientEmail || 'client@example.com'}</div>
+        </div>
+        <div className="paper-date">
+          <span className="paper-label">Date</span>
+          <div>{formatDate()}</div>
+        </div>
+      </div>
+
+      <ul className="paper-lines">
+        {items.map((item) => (
+          <li key={item.id}>
+            <div>
+              <div className={item.name ? 'line-name' : 'line-name is-empty'}>
+                {item.name || 'Untitled item'}
+              </div>
+              <div className="line-sub">
+                {Math.max(0, Number(item.qty) || 1)} × {money(item.price)}
+              </div>
+            </div>
+            <div className="line-amount">{money(lineTotal(item))}</div>
+          </li>
+        ))}
+      </ul>
+
+      <dl className="paper-totals">
+        <div>
+          <dt>Subtotal</dt>
+          <dd>{money(subtotal)}</dd>
+        </div>
+        <div>
+          <dt>Tax ({TAX_RATE * 100}%)</dt>
+          <dd>{money(tax)}</dd>
+        </div>
+      </dl>
+
+      <div className="paper-grand">
+        <span>Grand total</span>
+        <strong>{money(grand)}</strong>
+      </div>
+    </div>
+  );
+}
+
+/* ---------- App ---------- */
 function App() {
-  const [selectedPlan, setSelectedPlan] = useState('free');
+  // TODO: ye value baad me apne user/subscription data se set karein
+  const [selectedPlan] = useState('free');
+  const isPro = selectedPlan === 'pro';
+
   const [showModal, setShowModal] = useState(false);
   const [invoiceNumber, setInvoiceNumber] = useState('INV-1001');
+  const [businessName, setBusinessName] = useState('');
   const [clientName, setClientName] = useState('');
   const [clientEmail, setClientEmail] = useState('');
-  const [items, setItems] = useState([{ name: '', qty: 1, price: 0 }]);
-  const [loading, setLoading] = useState(false);
+  const nextId = useRef(2);
+  const [items, setItems] = useState([{ id: 1, name: '', qty: 1, price: 0 }]);
+  const [status, setStatus] = useState('idle'); // idle | loading | done
+  const [error, setError] = useState('');
 
-  const handleItemChange = (index, field, value) => {
-    const newItems = [...items];
-    newItems[index][field] = value;
-    setItems(newItems);
+  const atFreeLimit = !isPro && items.length >= FREE_ITEM_LIMIT;
+
+  // Escape se modal band ho
+  useEffect(() => {
+    if (!showModal) return;
+    const onKey = (e) => e.key === 'Escape' && setShowModal(false);
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [showModal]);
+
+  // "Downloaded" message thori der baad hat jaye
+  useEffect(() => {
+    if (status !== 'done') return;
+    const t = setTimeout(() => setStatus('idle'), 2500);
+    return () => clearTimeout(t);
+  }, [status]);
+
+  const handleItemChange = (id, field, value) => {
+    setItems((prev) => prev.map((i) => (i.id === id ? { ...i, [field]: value } : i)));
   };
 
   const addItemRow = () => {
-    setItems([...items, { name: '', qty: 1, price: 0 }]);
-  };
-
-  const removeItemRow = (index) => {
-    if (items.length > 1) {
-      setItems(items.filter((_, i) => i !== index));
+    if (atFreeLimit) {
+      setShowModal(true);
+      return;
     }
+    setItems((prev) => [...prev, { id: nextId.current++, name: '', qty: 1, price: 0 }]);
   };
 
-  const calculateTotal = () => {
-    return items.reduce((acc, item) => acc + (Number(item.qty) || 0) * (Number(item.price) || 0), 0);
+  const removeItemRow = (id) => {
+    if (items.length > 1) setItems((prev) => prev.filter((i) => i.id !== id));
   };
 
   const handleDownloadPDF = async (e) => {
     e.preventDefault();
-    
-    if (selectedPlan === 'free' && items.length > 2) {
+    setError('');
+
+    if (!isPro && items.length > FREE_ITEM_LIMIT) {
       setShowModal(true);
       return;
     }
 
-    setLoading(true);
-    const invoiceData = { invoiceNumber, clientName, clientEmail, items, plan: selectedPlan };
+    setStatus('loading');
+
+    const invoiceData = {
+      invoiceNumber,
+      clientName,
+      clientEmail,
+      plan: selectedPlan,
+      items: items.map(({ name, qty, price }) => ({
+        name,
+        qty: Number(qty),
+        price: Number(price),
+      })),
+    };
+    if (isPro && businessName.trim()) invoiceData.businessName = businessName.trim();
 
     try {
       const response = await fetch('/api/generate-pdf', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(invoiceData)
+        body: JSON.stringify(invoiceData),
       });
 
-      if (!response.ok) throw new Error('PDF Generation failed');
+      if (!response.ok) throw new Error('The PDF could not be generated.');
 
       const blob = await response.blob();
       const url = window.URL.createObjectURL(blob);
@@ -57,103 +230,271 @@ function App() {
       document.body.appendChild(a);
       a.click();
       a.remove();
+      window.URL.revokeObjectURL(url);
+      setStatus('done');
     } catch (err) {
-      alert('Error: ' + err.message);
-    } finally {
-      setLoading(false);
+      setError(`${err.message} Check your connection and try again.`);
+      setStatus('idle');
     }
   };
 
   const handleLemonSqueezyCheckout = () => {
-    // Yahan aap apna Lemon Squeezy Checkout URL dalenge (jo aap ki Lemon Squeezy product/store setting se milega)
-    // Payoneer aap ka Lemon Squeezy account ke sath payout ke liye attached hota hai.
-    const lemonSqueezyCheckoutUrl = "https://your-store.lemonsqueezy.com/checkout/buy/your-product-id";
-    window.location.href = lemonSqueezyCheckoutUrl;
+    window.location.href = LEMON_SQUEEZY_CHECKOUT_URL;
   };
 
   return (
-    <div style={{ maxWidth: '700px', margin: '30px auto', fontFamily: 'Arial', padding: '20px', border: '1px solid #ddd', borderRadius: '8px', boxShadow: '0 4px 6px rgba(0,0,0,0.1)' }}>
-      
-      {/* Subscription & Billing Status Header */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#f5f5f5', padding: '10px 15px', borderRadius: '6px', marginBottom: '20px' }}>
-        <div>
-          <strong>Account Plan: </strong> 
-          <span style={{ color: selectedPlan === 'pro' ? '#52c41a' : '#0070f3', fontWeight: 'bold', textTransform: 'uppercase' }}>
-            {selectedPlan} Plan
-          </span>
-        </div>
-        {selectedPlan === 'free' && (
-          <button onClick={() => setShowModal(true)} style={{ background: '#722ed1', color: '#fff', border: 'none', padding: '6px 12px', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold' }}>
-            Upgrade to Pro ($9/mo)
-          </button>
-        )}
-      </div>
+    <div className="app">
+      {/* Top bar */}
+      <header className="topbar">
+        <div className="topbar-inner">
+          <div className="brand">
+            <span className="brand-mark">
+              <IconDoc />
+            </span>
+            <span className="brand-name">Invoice Generator</span>
+          </div>
 
-      <h2 style={{ textAlign: 'center', color: '#333' }}>Invoice Generator Micro-SaaS</h2>
-      
-      <form onSubmit={handleDownloadPDF} style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
-        <div style={{ display: 'flex', gap: '10px' }}>
-          <label style={{ flex: 1 }}>Invoice Number:
-            <input type="text" value={invoiceNumber} onChange={(e) => setInvoiceNumber(e.target.value)} required style={{ width: '100%', padding: '8px', marginTop: '4px' }} />
-          </label>
-          <label style={{ flex: 1 }}>Client Name:
-            <input type="text" value={clientName} onChange={(e) => setClientName(e.target.value)} placeholder="Client Name" required style={{ width: '100%', padding: '8px', marginTop: '4px' }} />
-          </label>
-        </div>
-
-        <label>Client Email:
-          <input type="email" value={clientEmail} onChange={(e) => setClientEmail(e.target.value)} placeholder="client@example.com" required style={{ width: '100%', padding: '8px', marginTop: '4px' }} />
-        </label>
-
-        <hr style={{ border: '0.5px solid #eee' }} />
-
-        <h3>Invoice Items {selectedPlan === 'free' && <span style={{ fontSize: '12px', color: '#ff4d4f' }}>(Free plan max 2 items)</span>}</h3>
-        
-        {items.map((item, index) => (
-          <div key={index} style={{ display: 'flex', gap: '10px', alignItems: 'center', marginBottom: '8px' }}>
-            <input type="text" placeholder="Item / Service Name" value={item.name} onChange={(e) => handleItemChange(index, 'name', e.target.value)} required style={{ flex: 2, padding: '8px' }} />
-            <input type="number" min="1" placeholder="Qty" value={item.qty} onChange={(e) => handleItemChange(index, 'qty', e.target.value)} required style={{ flex: 0.5, padding: '8px' }} />
-            <input type="number" min="0" placeholder="Price" value={item.price} onChange={(e) => handleItemChange(index, 'price', e.target.value)} required style={{ flex: 0.8, padding: '8px' }} />
-            {items.length > 1 && (
-              <button type="button" onClick={() => removeItemRow(index)} style={{ padding: '8px 12px', background: '#ff4d4f', color: '#fff', border: 'none', cursor: 'pointer', borderRadius: '4px' }}>X</button>
+          <div className="topbar-actions">
+            <span className={isPro ? 'plan-chip is-pro' : 'plan-chip'}>
+              {isPro ? 'Pro plan' : 'Free plan'}
+            </span>
+            {!isPro && (
+              <button type="button" className="btn btn-accent btn-sm" onClick={() => setShowModal(true)}>
+                Upgrade to Pro
+              </button>
             )}
           </div>
-        ))}
+        </div>
+      </header>
 
-        {(selectedPlan === 'pro' || items.length < 2) && (
-          <button type="button" onClick={addItemRow} style={{ padding: '8px', background: '#52c41a', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>+ Add Item</button>
-        )}
-
-        <div style={{ textAlign: 'right', fontSize: '18px', fontWeight: 'bold',marginTop: '10px' }}>
-          Subtotal: ${calculateTotal()} <br />
-          Grand Total (Inc. Tax): ${(calculateTotal() * 1.05).toFixed(2)}
+      <main className="page">
+        <div className="page-head">
+          <h1>Create an invoice</h1>
+          <p>Fill in the details, check the preview, and download a PDF.</p>
         </div>
 
-        <button type="submit" disabled={loading} style={{ padding: '12px', backgroundColor: '#0070f3', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer', fontSize: '16px', marginTop: '10px' }}>
-          {loading ? 'Generating PDF...' : 'Download Invoice PDF'}
-        </button>
-      </form>
+        <form className="layout" onSubmit={handleDownloadPDF}>
+          {/* Left: form */}
+          <div className="sheet">
+            <section className="section">
+              <h2>Invoice details</h2>
+              <div className="grid-2">
+                <div className="field">
+                  <label htmlFor="invoiceNumber">Invoice number</label>
+                  <input
+                    id="invoiceNumber"
+                    type="text"
+                    value={invoiceNumber}
+                    onChange={(e) => setInvoiceNumber(e.target.value)}
+                    required
+                  />
+                </div>
+                <div className="field">
+                  <label htmlFor="businessName">
+                    Business name {!isPro && <span className="badge-pro">Pro</span>}
+                  </label>
+                  <input
+                    id="businessName"
+                    type="text"
+                    value={businessName}
+                    onChange={(e) => setBusinessName(e.target.value)}
+                    placeholder={isPro ? 'Your business name' : 'Available on Pro'}
+                    disabled={!isPro}
+                  />
+                </div>
+              </div>
+            </section>
 
-      {/* Lemon Squeezy Upgrade Modal */}
+            <section className="section">
+              <h2>Client</h2>
+              <div className="grid-2">
+                <div className="field">
+                  <label htmlFor="clientName">Client name</label>
+                  <input
+                    id="clientName"
+                    type="text"
+                    value={clientName}
+                    onChange={(e) => setClientName(e.target.value)}
+                    placeholder="Acme Studio"
+                    required
+                  />
+                </div>
+                <div className="field">
+                  <label htmlFor="clientEmail">Client email</label>
+                  <input
+                    id="clientEmail"
+                    type="email"
+                    value={clientEmail}
+                    onChange={(e) => setClientEmail(e.target.value)}
+                    placeholder="client@example.com"
+                    required
+                  />
+                </div>
+              </div>
+            </section>
+
+            <section className="section">
+              <h2>Items</h2>
+
+              <div className="items-head" aria-hidden="true">
+                <span>Description</span>
+                <span className="num">Qty</span>
+                <span className="num">Price</span>
+                <span className="num">Amount</span>
+                <span />
+              </div>
+
+              {items.map((item, index) => (
+                <div className="item-row" key={item.id}>
+                  <div className="cell cell-name" data-label="Description">
+                    <input
+                      type="text"
+                      placeholder="Service or product"
+                      aria-label={`Item ${index + 1} description`}
+                      value={item.name}
+                      onChange={(e) => handleItemChange(item.id, 'name', e.target.value)}
+                      required
+                    />
+                  </div>
+                  <div className="cell cell-qty" data-label="Qty">
+                    <input
+                      type="number"
+                      min="1"
+                      step="1"
+                      inputMode="numeric"
+                      aria-label={`Item ${index + 1} quantity`}
+                      value={item.qty}
+                      onChange={(e) => handleItemChange(item.id, 'qty', e.target.value)}
+                      required
+                    />
+                  </div>
+                  <div className="cell cell-price" data-label="Price">
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      inputMode="decimal"
+                      aria-label={`Item ${index + 1} price`}
+                      value={item.price}
+                      onChange={(e) => handleItemChange(item.id, 'price', e.target.value)}
+                      required
+                    />
+                  </div>
+                  <div className="cell cell-amount" data-label="Amount">
+                    <span className="amount">{money(lineTotal(item))}</span>
+                  </div>
+                  <div className="cell cell-remove">
+                    <button
+                      type="button"
+                      className="icon-btn"
+                      onClick={() => removeItemRow(item.id)}
+                      disabled={items.length === 1}
+                      aria-label={`Remove item ${index + 1}`}
+                      title="Remove item"
+                    >
+                      <IconTrash />
+                    </button>
+                  </div>
+                </div>
+              ))}
+
+              <div className="items-foot">
+                <button type="button" className="btn btn-outline" onClick={addItemRow}>
+                  <IconPlus /> Add item
+                </button>
+
+                {!isPro && (
+                  <p className={atFreeLimit ? 'limit is-full' : 'limit'}>
+                    {items.length} of {FREE_ITEM_LIMIT} items used on the Free plan.
+                    {atFreeLimit && (
+                      <>
+                        {' '}
+                        <button type="button" className="link-btn" onClick={() => setShowModal(true)}>
+                          Upgrade for unlimited items
+                        </button>
+                      </>
+                    )}
+                  </p>
+                )}
+              </div>
+            </section>
+          </div>
+
+          {/* Right: live preview + download */}
+          <aside className="summary">
+            <InvoicePreview
+              invoiceNumber={invoiceNumber}
+              businessName={isPro ? businessName.trim() : ''}
+              clientName={clientName}
+              clientEmail={clientEmail}
+              items={items}
+            />
+
+            {error && (
+              <div className="alert" role="alert">
+                {error}
+              </div>
+            )}
+
+            <button type="submit" className="btn btn-primary btn-block" disabled={status === 'loading'}>
+              {status === 'loading' ? (
+                <>
+                  <span className="spinner" aria-hidden="true" /> Generating PDF…
+                </>
+              ) : status === 'done' ? (
+                <>
+                  <IconCheck /> PDF downloaded
+                </>
+              ) : (
+                <>
+                  <IconDownload /> Download PDF
+                </>
+              )}
+            </button>
+          </aside>
+        </form>
+      </main>
+
+      {/* Upgrade modal */}
       {showModal && (
-        <div style={{ position: 'fixed', top: 0, left: 0, width: '100%', height: '100%', background: 'rgba(0,0,0,0.5)', display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
-          <div style={{ background: '#fff', padding: '30px', borderRadius: '8px', width: '400px', textAlign: 'center', boxShadow: '0 4px 10px rgba(0,0,0,0.2)' }}>
-            <h3 style={{ color: '#722ed1', marginBottom: '10px' }}>Upgrade to Pro Plan</h3>
-            <p style={{ color: '#666', fontSize: '14px', marginBottom: '20px' }}>
-              Free plan allows up to 2 items per invoice. Upgrade via Lemon Squeezy ($9/month) for unlimited items and custom branding. Payouts go directly to your Payoneer account!
+        <div className="overlay" onClick={() => setShowModal(false)}>
+          <div
+            className="modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="upgrade-title"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 id="upgrade-title">Upgrade to Pro</h2>
+            <p className="modal-price">
+              <strong>$9</strong> per month
             </p>
-            <div style={{ display: 'flex', gap: '10px', justifyContent: 'center' }}>
-              <button onClick={handleLemonSqueezyCheckout} style={{ background: '#722ed1', color: '#fff', border: 'none', padding: '10px 20px', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold' }}>
-                Pay with Lemon Squeezy
-              </button>
-              <button onClick={() => setShowModal(false)} style={{ background: '#ccc', color: '#333', border: 'none', padding: '10px 20px', borderRadius: '4px', cursor: 'pointer' }}>
-                Cancel
-              </button>
-            </div>
+            <p className="modal-text">
+              The Free plan includes up to {FREE_ITEM_LIMIT} items per invoice. Pro removes that
+              limit and adds your own branding.
+            </p>
+            <ul className="modal-list">
+              <li>
+                <IconCheck /> Unlimited items on every invoice
+              </li>
+              <li>
+                <IconCheck /> Your business name on the PDF
+              </li>
+            </ul>
+            <button
+              type="button"
+              className="btn btn-accent btn-block"
+              onClick={handleLemonSqueezyCheckout}
+              autoFocus
+            >
+              Upgrade with Lemon Squeezy
+            </button>
+            <button type="button" className="btn btn-text btn-block" onClick={() => setShowModal(false)}>
+              Not now
+            </button>
           </div>
         </div>
       )}
-
     </div>
   );
 }
