@@ -1,11 +1,19 @@
 const express = require('express');
 const cors = require('cors');
 const PDFDocument = require('pdfkit');
+const pdfParse = require('pdf-parse');
+const multer = require('multer');
+
+const upload = multer({ 
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 } // 5MB limit
+});
 
 const app = express();
 
 app.use(cors());
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
 /* ---------- Design settings ---------- */
 const COLORS = {
@@ -307,7 +315,7 @@ app.post('/api/convert-styled-text', (req, res) => {
     }
 
     doc.fontSize(11).fillColor('#334155').text(bodyText || 'No content provided.', {
-      lineGap: 6,
+      lineGuide: 6,
       align: 'justify'
     });
 
