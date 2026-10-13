@@ -143,7 +143,7 @@ function drawFooter(doc) {
 /* ---------- Routes ---------- */
 app.get('/api/health', (req, res) => res.json({ ok: true }));
 
-app.post('/api/generate-pdf', (req, res) => {
+app.post('/api/generate-invoice', (req, res) => {
   try {
     const body = req.body || {};
     const invoiceNumber = String(body.invoiceNumber || 'INV-1001');
