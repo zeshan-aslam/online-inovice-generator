@@ -1,11 +1,20 @@
 const express = require('express');
 const cors = require('cors');
 const PDFDocument = require('pdfkit');
+const pdfParse = require('pdf-parse');
+const multer = require('multer');
+
+// Configure multer for memory storage
+const upload = multer({ 
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 } // 5MB limit
+});
 
 const app = express();
 
 app.use(cors());
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
 /* ---------- Design settings ---------- */
 const COLORS = {
@@ -143,6 +152,7 @@ function drawFooter(doc) {
 /* ---------- Routes ---------- */
 app.get('/api/health', (req, res) => res.json({ ok: true }));
 
+// 1. Stable Invoice Generator Route
 app.post('/api/generate-invoice', (req, res) => {
   try {
     const body = req.body || {};
@@ -151,6 +161,11 @@ app.post('/api/generate-invoice', (req, res) => {
     const clientEmail = String(body.clientEmail || 'N/A');
     const businessName = String(body.businessName || 'Invoice Generator');
     const items = Array.isArray(body.items) ? body.items : [];
+    const plan = body.plan || 'free';
+
+    if (plan === 'free' && items.length > 2) {
+      return res.status(403).json({ error: 'Free plan allows maximum 2 items.' });
+    }
 
     const doc = new PDFDocument({
       size: 'A4',
@@ -165,33 +180,29 @@ app.post('/api/generate-invoice', (req, res) => {
     );
     doc.pipe(res);
 
-    // Header + info
     drawTopBand(doc, invoiceNumber, businessName);
     drawInfoSection(doc, { invoiceNumber, clientName, clientEmail });
 
-    // Table
     let y = drawTableHeader(doc, 230);
     let subtotal = 0;
 
     items.forEach((item, index) => {
-      const qty = Math.max(0, Number(item.qty) || 1);
+      const qty = Math.max(0, Number(item.qty || item.quantity) || 1);
       const price = Math.max(0, Number(item.price) || 0);
       const lineTotal = qty * price;
       subtotal += lineTotal;
 
-      const name = String(item.name || 'Service');
+      const name = String(item.name || item.description || 'Service');
 
       doc.font(FONT.regular).fontSize(10);
       const textHeight = doc.heightOfString(name, { width: COL.desc.w });
       const rowHeight = Math.max(textHeight, 12) + 20;
 
-      // New page if row does not fit
       if (y + rowHeight > BOTTOM_LIMIT) {
         doc.addPage();
         y = drawTableHeader(doc, 50);
       }
 
-      // Zebra background
       if (index % 2 === 1) {
         doc.rect(LEFT, y, CONTENT_WIDTH, rowHeight).fill(COLORS.zebra);
       }
@@ -206,7 +217,6 @@ app.post('/api/generate-invoice', (req, res) => {
         .fillColor(COLORS.navy)
         .text(money(lineTotal), COL.total.x, ty, { width: COL.total.w, align: 'right', lineBreak: false });
 
-      // Row bottom border
       doc
         .moveTo(LEFT, y + rowHeight)
         .lineTo(RIGHT, y + rowHeight)
@@ -217,7 +227,6 @@ app.post('/api/generate-invoice', (req, res) => {
       y += rowHeight;
     });
 
-    // Totals
     const tax = subtotal * TAX_RATE;
     const grandTotal = subtotal + tax;
 
@@ -243,7 +252,6 @@ app.post('/api/generate-invoice', (req, res) => {
     totalsLine('Subtotal', money(subtotal));
     totalsLine(`Tax (${TAX_RATE * 100}%)`, money(tax));
 
-    // Grand total highlight
     y += 4;
     doc.rect(boxX, y, boxW, 36).fill(COLORS.accent);
     doc
@@ -267,9 +275,73 @@ app.post('/api/generate-invoice', (req, res) => {
   }
 });
 
+// 2. Doc File to PDF Converter
+app.post('/api/convert-doc-file', upload.single('file'), (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+    
+    const fileContent = req.file.buffer.toString('utf8');
+    const doc = new PDFDocument({ margin: 50 });
+    
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', 'attachment; filename="converted_document.pdf"');
+    doc.pipe(res);
+
+    doc.fontSize(18).fillColor(COLORS.navy).text('Document Conversion', { align: 'center' });
+    doc.moveDown(1.5);
+    doc.fontSize(11).fillColor(COLORS.text).text(fileContent, { lineGap: 5 });
+    doc.end();
+  } catch (err) {
+    res.status(500).json({ error: 'Doc to PDF conversion failed' });
+  }
+});
+
+// 3. Styled Text to PDF Converter
+app.post('/api/convert-styled-text', (req, res) => {
+  try {
+    const { title, heading, bodyText } = req.body;
+    const doc = new PDFDocument({ margin: 50 });
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', 'attachment; filename="styled_report.pdf"');
+    doc.pipe(res);
+
+    doc.fontSize(22).fillColor('#1E3a8A').text(title || 'Report', { align: 'center' });
+    doc.moveDown(1);
+
+    if (heading) {
+      doc.fontSize(14).fillColor(COLORS.navy).text(heading, { underline: true });
+      doc.moveDown(0.5);
+    }
+
+    doc.fontSize(11).fillColor(COLORS.text).text(bodyText || 'No content provided.', {
+      lineGap: 6,
+      align: 'justify'
+    });
+
+    doc.end();
+  } catch (err) {
+    res.status(500).json({ error: 'Styled text conversion failed' });
+  }
+});
+
+// 4. PDF to Docs (Text Extraction)
+app.post('/api/pdf-to-docs', upload.single('pdfFile'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'No PDF file uploaded' });
+
+    const pdfData = await pdfParse(req.file.buffer);
+    
+    res.setHeader('Content-Type', 'text/plain');
+    res.setHeader('Content-Disposition', 'attachment; filename="extracted_text.txt"');
+    res.send(pdfData.text);
+  } catch (err) {
+    res.status(500).json({ error: 'PDF to text extraction failed' });
+  }
+});
+
 module.exports = app;
 
-// Only for local testing (Vercel does not use this)
 if (require.main === module) {
   const PORT = process.env.PORT || 5000;
   app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
