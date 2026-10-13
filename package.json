@@ -1,17 +1,13 @@
 {
-  "name": "online-inovice-generator",
+  "name": "online-invoice-generator",
   "version": "1.0.0",
-  "description": "Invoice Generator Micro-SaaS",
-  "main": "api/index.js",
   "scripts": {
-    "build": "cd client && npm install && npm run build",
-    "start": "node api/index.js"
+    "build": "cd client && npm install && npm run build"
   },
   "dependencies": {
     "cors": "^2.8.6",
     "dotenv": "^18.0.7",
     "express": "^4.19.2",
     "pdfkit": "^0.15.0"
-  },
-  "devDependencies": {}
+  }
 }
