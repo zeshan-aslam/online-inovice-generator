@@ -267,6 +267,71 @@ app.post('/api/generate-pdf', (req, res) => {
   }
 });
 
+// 2. Doc File to PDF Converter
+app.post('/api/convert-doc-file', upload.single('file'), (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+    
+    const fileContent = req.file.buffer.toString('utf8');
+    const doc = new PDFDocument({ margin: 50 });
+    
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', 'attachment; filename=converted_from_doc.pdf');
+    doc.pipe(res);
+
+    doc.fontSize(18).fillColor('#0f172a').text('Document to PDF Conversion', { align: 'center' });
+    doc.moveDown(1.5);
+    doc.fontSize(11).fillColor('#334155').text(fileContent, { lineGap: 5 });
+    doc.end();
+  } catch (err) {
+    res.status(500).json({ error: 'Doc to PDF conversion failed' });
+  }
+});
+
+// 3. Styled Text to PDF Converter (with Headings & Requirements)
+app.post('/api/convert-styled-text', (req, res) => {
+  try {
+    const { title, heading, bodyText } = req.body;
+    const doc = new PDFDocument({ margin: 50 });
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', 'attachment; filename=styled_document.pdf');
+    doc.pipe(res);
+
+    doc.fontSize(24).fillColor('#1e3a8a').text(title || 'Styled Report', { align: 'center' });
+    doc.moveDown(1);
+
+    if (heading) {
+      doc.fontSize(16).fillColor('#0f172a').text(heading, { underline: true });
+      doc.moveDown(0.5);
+    }
+
+    doc.fontSize(11).fillColor('#334155').text(bodyText || 'No content provided.', {
+      lineGap: 6,
+      align: 'justify'
+    });
+
+    doc.end();
+  } catch (err) {
+    res.status(500).json({ error: 'Styled text conversion failed' });
+  }
+});
+
+// 4. PDF to Docs (Extract text from PDF)
+app.post('/api/pdf-to-docs', upload.single('pdfFile'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'No PDF file uploaded' });
+
+    const pdfData = await pdfParse(req.file.buffer);
+    
+    res.setHeader('Content-Type', 'text/plain');
+    res.setHeader('Content-Disposition', 'attachment; filename=extracted_text.txt');
+    res.send(pdfData.text);
+  } catch (err) {
+    res.status(500).json({ error: 'PDF to text extraction failed' });
+  }
+});
+
 module.exports = app;
 
 // Only for local testing (Vercel does not use this)
